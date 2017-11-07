@@ -8,8 +8,8 @@ import scipy.ndimage
 import time
 
 def mosaic(im):
-    h=int(im.size[0]/2)
-    w=int(im.size[1]/2)
+    h=int(im.size[0]/2) - 1
+    w=int(im.size[1]/2) - 1
 
     print(filename+'...')
     print('w: '+str(w)+'  h: '+str(h))
@@ -24,8 +24,8 @@ def mosaic(im):
     r1=np.zeros((w,h))
     b1=np.zeros((w,h))
 
-    for x in range(0,w-1):
-        for y in range(0,h-1):
+    for x in range(0,w):
+        for y in range(0,h):
             x1=x*2
             y1=y*2
             #g1[x,y]=(g[x1,y1]+g[x1+1,y1+1])/2
@@ -75,9 +75,9 @@ def savepatch(opendir,savedir,im_mos_pat_ls,im_pat_ls):
     print('Saved '+sv2)
     return
 
-opendir = r'C:\Training Images 3'
+opendir = r'F:\5E1\Data_misc'
 
-patch_size=64
+patch_size=32
 lslen=int(len(os.listdir(opendir)))
 print(lslen)
 completed=1
@@ -89,7 +89,6 @@ for filename in os.listdir(opendir):
         try:
             im=Image.open(sc)
             #im.show()
-
             im_raw_mos,im_orig = mosaic(im)
 
             #print(filename+"_im-raw_"+str(im_raw.shape))
