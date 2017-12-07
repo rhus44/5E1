@@ -75,9 +75,13 @@ def savepatch(opendir,savedir,im_mos_pat_ls,im_pat_ls):
     print('Saved '+sv2)
     return
 
-opendir = r'C:\Training Images 3'
+opendir = r'F:\5E1\Data_misc'
 
+<<<<<<< HEAD
 patch_size=128
+=======
+patch_size=32
+>>>>>>> 2fd7b4125df602c85df517237b2a37ba0cf01331
 lslen=int(len(os.listdir(opendir)))
 print(lslen)
 completed=1
@@ -89,7 +93,6 @@ for filename in os.listdir(opendir):
         try:
             im=Image.open(sc)
             #im.show()
-
             im_raw_mos,im_orig = mosaic(im)
 
             #print(filename+"_im-raw_"+str(im_raw.shape))
