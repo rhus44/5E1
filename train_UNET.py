@@ -163,6 +163,23 @@ def denormalise1(array):
     return ((array)*255).astype(np.uint8)
 
 
+def addBayer(orig, predicted):
+
+    pred1 = predicted
+    
+    predicted[::2,::2,1] = orig[::2,::2,1]
+    
+    predicted[::2,1::2,2] = orig[::2,1::2,2]
+    
+    predicted[1::2,::2,1] = orig[1::2,::2,1]
+
+    predicted[1::2,1::2,0] = orig[1::2,1::2,0]
+    
+    diff = pred1 - predicted
+    
+    return predicted
+
+
 
 def train_generator_rgb(train_dir, patch_size, batch_size):
     '''
@@ -236,44 +253,6 @@ def val_generator_rgb(train_dir):
 
 
 
-def train_generator_rgb5(train_dir, patch_size, batch_size):
-    '''
-    Python generator that loads imgs and batches
-    '''
-
-    while True:
-        img_name = os.listdir(train_dir)
-        
-        
-        rem_mos = []
-        rem_orig = []
-        for img  in enumerate(img_name):
-
-            sc = os.path.join(train_dir,img[1])
-            #print(sc)
-            try:
-                im = cv2.imread(sc)
-
-                img_ptch = extractPatches(im,patch_size) 
-                print(img_ptch.shape)
-                mos = mosaic(img_ptch)
-                
-                input_mos = np.zeros((batch_size,patch_size,patch_size,4))
-                imput_orig = np.zeros((batch_size,patch_size,patch_size,3))
-                num_ptchs = mos.shape[0]
-                 
-                
-                print(mos.shape)
-                print(img_ptch.shape)
-                yield normalise(mos), normalise(img_ptch)                    
-                    
-                
-            except Exception as e:
-                print('file open error: ' + str(e))                
-    return
-
-
-
 def predict_generator_rgb(train_dir):
     '''
     Python generator that loads imgs and batches
@@ -295,7 +274,7 @@ def predict_generator_rgb(train_dir):
                 mos = np.array([mosaic1(im)])
            
 
-                yield normalise(mos), im                  
+                yield normalise1(mos), im, img[1]                  
                 #print('Batched Input')
                                   
             except Exception as e:
@@ -305,23 +284,35 @@ def predict_generator_rgb(train_dir):
 
 
 
-def predict_generator(model,k_gen,steps,data,bp):
+def predict_generator(model,k_gen,steps,data,bp, save_file):
     
     psnr = []
     ssim = []
     
     for i in range(steps):
-        p_img_gen, orig_gen = next(k_gen)
+        p_img_gen, orig_gen, img_name = next(k_gen)
 
         pred_img = (model.predict(p_img_gen,batch_size=1))[0]
-        #pred_img[(pred_img > 1)] = 1
-        pred_img = denormalise(pred_img)
+        pred_img[(pred_img > 1)] = 1
+        pred_img = denormalise1(pred_img)
         print(pred_img.min())
         print(pred_img.max())
         
         cv2.imshow('image',pred_img)
         cv2.waitKey(0)
+        cv2.destroyAllWindows()        
+        
+        pred_img = addBayer(orig_gen, pred_img)
+        
+        cv2.imshow('image',abs((pred_img-orig_gen)))
+        cv2.waitKey(0)
         cv2.destroyAllWindows()
+        
+        #cv2.imshow('image',pred_img)
+        #cv2.waitKey(0)
+        #cv2.destroyAllWindows()
+        
+        #cv2.imwrite(os.path.join(save_file,('predicted_'+img_name)),pred_img)
         
         psnr.append(skimage.measure.compare_psnr(pred_img[bp:-bp,bp:-bp,:],orig_gen[bp:-bp,bp:-bp,:]))
         ssim.append(skimage.measure.compare_ssim(pred_img[bp:-bp,bp:-bp,:],orig_gen[bp:-bp,bp:-bp,:],multichannel=True))
