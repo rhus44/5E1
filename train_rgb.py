@@ -98,7 +98,7 @@ class train_seq(Sequence):
 def extractPatches(im,patch_size):
     return image.extract_patches_2d(im, (patch_size*2,patch_size*2), max_patches=96)
 
-
+#note change of mosaic (20/12/2017)
 def mosaic(im_ptchs):
           
     g1 = im_ptchs[:,::2,::2,1]
@@ -304,4 +304,52 @@ def predict_generator(model,k_gen,steps,data,bp,save_file):
     print('Kodak SSIM Average: '+str(ssim_avg))
     
     return psnr, ssim, psnr_avg, ssim_avg
+    
+
+    
+def predict_chal_patchs(model,k_gen,steps,save_file):
+    
+    chlng = []
+    target = []
+    
+    c_name = r'challenge_input'
+    t_name = r'challenge_target'
+    num_btch = 0
+    
+    for i in range(steps):
+        input_ptchs, target_patchs = next(k_gen)
+    
+        pred_btch = model.predict_on_batch(input_ptchs)
+    
+        pred_btch = denormalise(pred_btch)
+        
+        for i in range(pred_btch[0]):
+            
+            if ((skimage.measure.compare_psnr(pred_btch[i],target_patchs[i]))<30):
+                
+                    chnlg.append(pred_btch[i])
+                    target.append(target_patchs[i])
+                    
+            if (len(chlng) > 95):
+                svc = os.path.join(save_file,(c_name+str(num_btch)))
+                svt = os.path.join(save_file,(t_name+str(num_btch)))
+                
+                np.save(svc, np.stack(chnlg,0))
+                np.save(svt, np.stack(target,0))
+                
+                chlng = []
+                target = []
+                
+                num_btch++
+                
+    if (len(chlng) != 0):
+            np.save(svc, np.stack(chnlg,0))
+                np.save(svt, np.stack(target,0))
+                
+                chlng = []
+                target = []
+                
+                num_btch++
+    
+    return
     
