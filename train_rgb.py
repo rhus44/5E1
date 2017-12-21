@@ -317,6 +317,10 @@ def predict_chal_patchs(model,k_gen,steps,save_file):
     num_btch = 0
     
     for i in range(steps):
+        
+        print("\r")
+        print(str(i) + " in " + str(steps))
+        
         input_ptchs, target_patchs = next(k_gen)
     
         pred_btch = model.predict_on_batch(input_ptchs)

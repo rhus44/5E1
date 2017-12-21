@@ -174,8 +174,8 @@ def addBayer(orig, predicted):
     predicted[1::2,::2,1] = orig[1::2,::2,1]
 
     predicted[1::2,1::2,0] = orig[1::2,1::2,0]
-    
-    diff = pred1 - predicted
+   
+    print(np.average(abs(pred1-predicted)))
     
     return predicted
 
@@ -307,10 +307,6 @@ def predict_generator(model,k_gen,steps,data,bp, save_file):
         cv2.imshow('image',abs((pred_img-orig_gen)))
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-        
-        #cv2.imshow('image',pred_img)
-        #cv2.waitKey(0)
-        #cv2.destroyAllWindows()
         
         #cv2.imwrite(os.path.join(save_file,('predicted_'+img_name)),pred_img)
         
