@@ -145,6 +145,15 @@ def rgb2yuv(array):
     return yuv.astype(np.float32)
 
 
+def yuv2bgr(array):
+    
+    m = np.array([[ 1, 1, 1],
+                 [2.032, -0.39461, -0.00004],
+                 [ -0.00048, -0.5805,  1.13983]])
+
+    bgr = np.dot(array, m)
+    
+    return bgr.astype(np.float32)
 
 def train_generator_yuv(train_dir, patch_size, batch_size):
     '''
@@ -222,8 +231,9 @@ def predict_generator(model,k_gen,steps,data,bp,save_file):
         p_img_gen, orig_gen, img_name = next(k_gen)
 
         pred_img = (model.predict(p_img_gen,batch_size=1))[0]
-        pred_img = denormalise(pred_img)
-        pred_img_bgr = cv2.cvtColor(pred_img,cv2.COLOR_YUV2BGR)
+        pred_img_bgr = yuv2bgr(pred_img)
+        pred_img_bgr = denormalise(pred_img_bgr)
+        
         print(pred_img_bgr.max())
         print(pred_img_bgr.min())
         
