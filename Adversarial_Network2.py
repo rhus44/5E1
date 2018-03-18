@@ -1339,6 +1339,7 @@ class DiscModel:
         gen_model = keras.models.load_model(gen_model_path)
         print("Loaded Gen-Model")
         fls = len(os.listdir(self.load_training))
+        flv = len(os.listdir(load_validation))
         train_generator = train_generator_rgb_tiled(self.load_training, 64, self.batch_size)
         validation_generator = train_generator_rgb_tiled(load_validation, 64, self.batch_size)
 
@@ -1349,6 +1350,7 @@ class DiscModel:
 
         loss_history = {'discriminator_loss': [],
                         'discriminator_acc': [], }
+        csv_logs = {'Disc_loss_train': [], 'Disc_loss_val': [], }
 
         print("Begin Disc_Model Pre-Train")
         num_batches = int(2 * fls)
@@ -1375,14 +1377,32 @@ class DiscModel:
 
                     progress_bar.update(i + 1)
 
-                print('Epoch: ', ep)
                 self.disc_model.save(os.path.join(self.save_epoch_models, 'Epoch.' + str(ep) + '.h5'))
 
-                csv_logger.on_epoch_end(epoch=ep, logs=loss_history)
+                # test model
+                for i in range(2 * flv):
+                    inputs, input_orig = next(validation_generator)
+
+                    # test Disc_model
+                    gen_batch = gen_model.predict_on_batch(inputs)
+
+                    target_label = [0] * self.batch_size + [1] * self.batch_size
+
+                    y_gan = np.asarray(target_label, dtype=np.int).reshape(-1, 1)
+                    y_gan = to_categorical(y_gan, num_classes=2)
+                    y_gan = smooth_gan_labels(y_gan)
+
+                    input_gen = np.concatenate((gen_batch, input_orig), axis=0)
+
+                    hist_val_disc = self.disc_model.test_on_batch(input_gen, y_gan)
+
+                    csv_logs['Disc_loss_train'] = hist_loss
+                    csv_logs['Disc_loss_val'] = hist_val_disc
+
+                csv_logger.on_epoch_end(epoch=ep, logs=csv_logs)
 
             except KeyboardInterrupt:
                 print("Keyboard interrupt detected. Stopping early and Saving Out.")
-
                 self.disc_model.save(
                     os.path.join(self.save_epoch_models, 'Discriminator_2.Epoch.' + str(ep) + '.h5'))
                 break
