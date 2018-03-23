@@ -1,31 +1,26 @@
-import cv2
-import numpy as np
-import math
-from matplotlib import pyplot as plt
-from sklearn.feature_extraction import image
-import os
-import keras
-import skimage
-from PIL import Image
-from keras.utils import Sequence
-from keras import backend as K
-from keras import backend as KC
-import threading
 import datetime
+import math
 import random
-from keras.utils.np_utils import to_categorical
 
+import cv2
 import keras
+import skimage.measure
+from keras.layers import (Conv2D, UpSampling2D, Input, concatenate, Lambda, Flatten,
+                          Dense, BatchNormalization)
+from keras.layers.advanced_activations import LeakyReLU
+from keras.applications.vgg16 import VGG16
 from keras.models import *
-from keras.models import Sequential
-from keras.layers import (Conv2D, Activation, UpSampling2D, Reshape, MaxPooling2D,
-                          Dropout, Cropping2D, merge, Input, concatenate, Conv2DTranspose, Lambda, Flatten,
-                          Dense, AveragePooling2D)
-from keras.optimizers import Adadelta, Nadam, RMSprop, SGD, Adam
-from keras.models import load_model
-from tensorflow.contrib.keras.python.keras.backend import clear_session
+from keras.optimizers import Nadam, Adam
+from keras.utils import Sequence
+from keras.utils.generic_utils import Progbar
+from keras.utils.np_utils import to_categorical
+from sklearn.feature_extraction import image
+from sklearn.feature_extraction import image
+from keras import backend as k
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+k.clear_session()
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 class Save_predictions(keras.callbacks.Callback):
     def __init__(self, save_file, open_dir):
@@ -655,7 +650,6 @@ def val_generator_rgb(train_dir):
                 # print(normalise1(mos).shape)
 
                 yield [normalise1(mos4), normalise1(mos3)], normalise1(np.array([im]))
-                # print('Batched Input')
 
             except Exception as e:
                 print('file open error: ' + str(e))
@@ -705,7 +699,7 @@ def predict_generator(model, k_gen, steps, data, bp, save_file):
         # pred_img = denormalise1(pred_img)
         # print("Output max:", str(pred_img.min()))
         # print("Output min", str(pred_img.max()))
-        print("Predicted Model Shape: " + str(pred_img.shape))
+        #print("Predicted Model Shape: " + str(pred_img.shape))
         # cv2.imshow('image',pred_img)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
@@ -715,11 +709,11 @@ def predict_generator(model, k_gen, steps, data, bp, save_file):
         pred_psnr = skimage.measure.compare_psnr(pred_img[bp:-bp, bp:-bp, :], orig_gen[bp:-bp, bp:-bp, :], 1)
         print(img_name + " PSNR: " + str(pred_psnr))
 
-        cv2.imshow("Original " + img_name, orig_gen)
-        cv2.imshow("Difference " + img_name, (np.floor((abs(orig_gen - pred_img)) * 255)).astype(np.uint8) + 100)
-        cv2.imshow("Predicted " + img_name, pred_img)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # cv2.imshow("Original " + img_name, orig_gen)
+        # cv2.imshow("Difference " + img_name, (np.floor((abs(orig_gen - pred_img)) * 255)).astype(np.uint8) + 100)
+        # cv2.imshow("Predicted " + img_name, pred_img)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
 
         cv2.imwrite(os.path.join(save_file, ('predicted_' + img_name)), denormalise1(pred_img))
 
@@ -797,6 +791,10 @@ def tile_image(target, save_dir, s_name):
     return
 
 
+###############################################################################
+###############################################################################
+###############################################################################
+
 def smooth_gan_labels(y):
     assert len(y.shape) == 2, "Needs to be a binary class"
     y = np.asarray(y, dtype='int')
@@ -810,6 +808,13 @@ def smooth_gan_labels(y):
                 Y[i, j] = np.random.uniform(0.7, 1.2)
 
     return Y
+
+
+def perceptual_loss(y_true, y_pred):
+    vgg = VGG16(include_top=False, weights='imagenet', input_shape=(128,128,3))
+    loss_model = Model(inputs=vgg.input, outputs=vgg.get_layer('block3_conv3').output)
+    loss_model.trainable = False
+    return K.mean(K.square(loss_model(y_true) - loss_model(y_pred)))
 
 
 def k_load_model(path):
@@ -839,6 +844,7 @@ class AdModel:
         self.disc_loss_weight = disc_loss_weight
         self.save_epoch_models = None
         self.save_file = None
+        self.save_test = None
 
         self.gen_loss_func = 'mse'
         self.disc_loss_func = 'categorical_crossentropy'
@@ -848,30 +854,48 @@ class AdModel:
         self.un_def_gen_model = None
         self.disc_model = None
         self.ad_model = None
+
+        self.test_data = None
+        self.keyname = "Adversarial_Model_3"
         return
 
     def mk_file(self):
         save_results = r'C:\Users\buggyr\Mosaic_Experiments\models'
-        keyname = "_Ad_Model"
         now = datetime.datetime.now()
-        self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + keyname)
+        self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + self.keyname)
         os.mkdir(self.save_file)
         self.save_pred_dir = os.path.join(self.save_file, 'Epoch_Predictions')
         os.mkdir(self.save_pred_dir)
         self.save_epoch_models = os.path.join(self.save_file, 'Epoch_Models')
         os.mkdir(self.save_epoch_models)
-        save_test = os.path.join(self.save_file, 'Test_Results')
-        os.mkdir(save_test)
+        self.save_test = os.path.join(self.save_file, 'Test_Results')
+        os.mkdir(self.save_test)
 
         return self.save_file
 
     def load_model(self, path):
 
         self.ad_model = keras.models.load_model(path)
+        print('Loaded AD_model')
+
+        ad_weights = self.ad_model.get_weights()
+        print('Loaded Weights')
+
+        self.disc_model.set_weights(ad_weights[32:43])
+        print('Set Weights')
+
+        self.disc_model.save('disc.h5')
+        print('Saved Model')
+
+        self.un_def_gen_model.set_weights(ad_weights[0:31])
+        print('set weights')
+
+        self.un_def_gen_model.save('un_def_gen.h5')
+        print('Saved Model')
 
         return self.ad_model
 
-    def get_defined_input_model(self, shape):
+    def get_defined_gen_model(self, shape):
         chnl4_input = Input(shape=(64, 64, 4))
         chnl3_input = Input(shape=(128, 128, 3))
 
@@ -905,17 +929,14 @@ class AdModel:
 
         out = Lambda(clipper, name='clipper')(conv16)
 
-        self.defined_gen_model = Model(inputs=[chnl4_input, chnl3_input], outputs=[out])
+        self.defined_gen_model = Model(inputs=[chnl4_input, chnl3_input], outputs=[out], name='Defined_Generator_Model')
 
-        # #model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
-        optimizer_func = Nadam(lr=0.00002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, schedule_decay=0.004)
-        loss_func = 'logcosh'
-        self.defined_gen_model.compile(optimizer=optimizer_func, loss=loss_func)
+        # model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
         # model1.compile(optimizer=optimizer_func,loss=loss_func)
 
         return self.defined_gen_model
 
-    def load_undefined_input_model(self, shape=(128, 128, 3)):
+    def load_undefined_gen_model(self, shape=(128, 128, 3)):
 
         chnl4_input = Input(shape=(None, None, 4))
         chnl3_input = Input(shape=(None, None, 3))
@@ -950,9 +971,9 @@ class AdModel:
 
         out = Lambda(clipper, name='clipper')(conv16)
 
-        self.un_def_gen_model = Model(inputs=[chnl4_input, chnl3_input], outputs=[out])
+        self.un_def_gen_model = Model(inputs=[chnl4_input, chnl3_input], outputs=[out], name='Undefined_Generator_Model')
 
-        # #model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
+        # model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
         optimizer_func = Nadam(lr=0.00002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, schedule_decay=0.004)
         loss_func = 'logcosh'
         self.un_def_gen_model.compile(optimizer=optimizer_func, loss=loss_func)
@@ -961,31 +982,46 @@ class AdModel:
         return self.un_def_gen_model
 
     def load_gen_model(self,
-                       path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-07 '
-                            r'20-22_UNET_2_layer_64x64_logcosh_normal1_Patterns+Gharbi_2_input_strides+upsample'
-                            r'\Epoch_Models\model.111-0.00.hdf5'):
+                       path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-07 20-22_UNET_2_layer_64x64_logcosh_normal1_Patterns+Gharbi_2_input_strides+upsample\Epoch_Models\model.111-0.00.hdf5'):
 
-        self.un_def_gen_model = k_load_model(path)
+        self.un_def_gen_model = keras.models.load_model(path)
         weights = self.un_def_gen_model.get_weights()
 
-        self.get_defined_input_model(shape=(128, 128, 3))
+        self.get_defined_gen_model(shape=(128, 128, 3))
         self.defined_gen_model.set_weights(weights)
 
         print('Gen_loaded')
         return self.defined_gen_model
 
     def load_disc_model(self,
-                        path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-03-15 20-37_descriminator1\Epoch_Models\Epoch.5.h5'):
+                        path=r'C:\Users\buggyr\Mosaic_Experiments\src\disc.h5'):
 
         self.disc_model = k_load_model(path)
+        self.disc_model.compile(self.disc_optimizer_func, self.disc_loss_func)
+        self.disc_model.name = 'Discriminator_Model'
 
         print('Disc_Loaded')
         return self.disc_model
 
-    def assm_ad_model(self):
+    def set_disc_model(self, model):
+
+        self.disc_model = model
+
+    def assm_ad_model(self, path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-07 20-22_UNET_2_layer_64x64_logcosh_normal1_Patterns+Gharbi_2_input_strides+upsample\Epoch_Models\model.111-0.00.hdf5'):
+
+        self.load_gen_model(path)
+
+        # self.ad_model = Model(inputs=self.defined_gen_model.inputs,
+        #                       outputs=[self.defined_gen_model.output, self.disc_model(self.defined_gen_model.output)],
+        #                       name='Adversarial_Container')
+
+        out_gen = self.defined_gen_model.output
+
+        out_disc = self.disc_model(out_gen)
 
         self.ad_model = Model(inputs=self.defined_gen_model.inputs,
-                              outputs=[self.defined_gen_model.output, self.disc_model(self.defined_gen_model.output)])
+                              outputs=[self.defined_gen_model.output, out_disc],
+                              name='Adversarial_Container')
 
         print('Ad_Model Assembled')
         return self.ad_model
@@ -993,96 +1029,224 @@ class AdModel:
     def set_trainable(self, value):
         for layer in self.disc_model.layers:
             layer.trainable = value
-        #self.disc_model.compile(optimizer=self.disc_optimizer_func, loss=self.disc_loss_func)
 
     def predict_callback(self, epoch):
 
         for layr in range(len(self.un_def_gen_model.layers)):
+
             self.un_def_gen_model.layers[layr].set_weights(self.ad_model.layers[layr].get_weights())
 
         self.un_def_gen_model.compile(optimizer=self.disc_optimizer_func, loss=self.gen_loss_func)
 
         predict_gen = predict_generator_rgb(self.pred_dir)
+        psnr = {}
         for _ in (os.listdir(self.pred_dir)):
             p_img_gen, orig_gen, img_name = next(predict_gen)
 
             pred = self.un_def_gen_model.predict(p_img_gen, batch_size=1)[0]
             pred_img = addBayer(orig_gen, pred)
 
+            pred_psnr = skimage.measure.compare_psnr(pred_img, orig_gen, 1)
+            psnr[img_name] = pred_psnr
+            print(img_name + " PSNR: " + str(pred_psnr))
+
             sv = os.path.join(self.save_pred_dir, str(epoch) + '_' + img_name)
             cv2.imwrite(sv, denormalise1(pred_img))
+        print('Written Predicted Images')
 
-    def train(self, load_training, batch_size=32, epochs=50):
+    def train(self, load_training, load_validation=r'C:\Users\buggyr\Mosaic_Experiments\data\interim\validation_tiled',
+              batch_size=32, epochs=50, initial_epoch=0):
+
         # Train D -> Train AD -> Train D
         self.batch_size = batch_size
         optimizer_func = Nadam(lr=0.00002, beta_1=0.9, beta_2=0.999, epsilon=1e-08, schedule_decay=0.004)
         self.gen_loss_func = 'mse'
-        self.disc_loss_func = 'categorical_crossentropy'
+        self.disc_loss_func = 'binary_crossentropy'
 
-        self.defined_gen_model.compile(optimizer=optimizer_func, loss=self.gen_loss_func)
         self.disc_model.compile(optimizer=optimizer_func, loss=self.disc_loss_func)
+
+        self.set_trainable(False)
+
         self.ad_model.compile(optimizer=optimizer_func, loss=[self.gen_loss_func, self.disc_loss_func],
                               loss_weights=[1 - self.disc_loss_weight, self.disc_loss_weight])
-        # self.load_undefined_input_model()
+        self.ad_model.stop_training = False
 
-        print('Models Compiled')
+        print('Models Compiled!')
 
-        fls = len(os.listdir(load_training))
+        tbCallBack = keras.callbacks.TensorBoard(log_dir=os.path.join(self.save_file, 'TNSR_BRD'), histogram_freq=0,
+                                                 write_graph=True, write_images=True, write_grads=True)
+        tbCallBack.set_model(self.ad_model)
+        csv_logger = keras.callbacks.CSVLogger(os.path.join(self.save_file, 'Adversarial_training.log'), separator=',',
+                                               append=False)
+        csv_logger.set_model(self.ad_model)
+        csv_logger.on_train_begin()
+
+        fln_training = len(os.listdir(load_training))
+        fln_validation = len(os.listdir(load_validation))
 
         loss_history = {'discriminator_loss': [],
-                        'discriminator_acc': [], }
+                        'generator_loss': [], }
 
-        print("Begin AD_Model Train")
+        validation_history = {'discriminator_loss': [],
+                              'generator_loss': [], }
 
-        for ep in range(epochs):
-            print('Epoch: ', ep)
-            for i in range(fls):
-                train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+        logs = {'Gen_loss_train': [],
+                'Disc_loss_train': [],
+                'Gen_loss_val': [],
+                'Disc_loss_val': [], }
 
-                ####### train discriminator ########
-                inputs, input_orig = next(train_generator)
+        print("Begin ", self.keyname , " Train")
 
-                # print("batched Size:", input_orig.shape)
+        for ep in range(initial_epoch, epochs + 1):
+            print('Epoch {}/{}'.format(ep, epochs))
 
+            num_batches = int(2 * fln_training)
+            progress_bar = Progbar(target=num_batches)
+
+            epoch_gen_loss = []
+            epoch_disc_loss = []
+
+            train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+            validation_generator = train_generator_rgb_tiled(load_validation, 64, self.batch_size)
+
+            try:
+                for i in range(2 * fln_training):
+
+                    ####### train discriminator ########
+                    inputs, input_orig = next(train_generator)
+
+                    gen_batch = self.defined_gen_model.predict_on_batch(inputs)
+
+                    target = np.array([0] * self.batch_size + [0.95] * self.batch_size)
+
+                    input_gen = np.concatenate((gen_batch, input_orig), axis=0)
+
+                    # d_weights = self.disc_model.get_weights()
+                    # d_ad_weights = self.ad_model.get_weights()
+                    # g_weights = self.defined_gen_model.get_weights()
+
+                    epoch_disc_loss.append(self.disc_model.train_on_batch(input_gen, target))
+
+                    ############################################
+                    # d_weights = self.disc_model.get_weights()
+                    # d_ad_weights = self.ad_model.get_weights()
+                    # g_weights = self.defined_gen_model.get_weights()
+
+                    ########### train generator ################
+
+                    target = np.array([1] * self.batch_size)
+
+                    hist_ad = (self.ad_model.train_on_batch(inputs, [input_orig, target]))
+
+                    epoch_gen_loss.append([hist_ad[0], hist_ad[2]])
+                    # d_weights = self.disc_model.get_weights()
+                    # d_ad_weights = self.ad_model.get_weights()
+                    # g_weights = self.defined_gen_model.get_weights()
+
+                    progress_bar.update(i + 1)
+
+            except KeyboardInterrupt:
+                print("Keyboard interrupt detected. Stopping early and Saving Out.")
+                self.ad_model.save(os.path.join(self.save_epoch_models, 'Adversarial_3.Epoch.' + str(ep) + '.h5'))
+                self.disc_model.save(
+                    os.path.join(self.save_epoch_models, 'Discriminator_3.Epoch.' + str(ep) + '.h5'))
+                self.un_def_gen_model.save(
+                    os.path.join(self.save_epoch_models, 'Generator_undefined_3.Epoch.' + str(ep) + '.h5'))
+                break
+
+            # Epoch Loss History #####################
+            hist_val_ad = 0
+            hist_val_disc = 0
+            for i in range(2 * fln_validation):
+                inputs, input_orig = next(validation_generator)
+
+                target = np.array([1] * self.batch_size)
+
+                # test AD_Model {Generator}
+                hist_val_ad = self.ad_model.test_on_batch(inputs, [input_orig, target])
+
+                # test Disc_model
                 gen_batch = self.defined_gen_model.predict_on_batch(inputs)
 
-                target_label = [0] * self.batch_size + [1] * self.batch_size
-
-                y_gan = np.asarray(target_label, dtype=np.int).reshape(-1, 1)
-                y_gan = to_categorical(y_gan, num_classes=2)
-                y_gan = smooth_gan_labels(y_gan)
+                target = np.array([0] * self.batch_size + [1] * self.batch_size)
 
                 input_gen = np.concatenate((gen_batch, input_orig), axis=0)
 
-                hist_loss = self.disc_model.train_on_batch(input_gen, y_gan)
-                # hist_loss = hist_loss.tolist()
+                hist_val_disc = self.disc_model.test_on_batch(input_gen, target)
 
-                # loss_history['discriminator_loss'].append(hist_loss)
+            validation_history['generator_loss'].append(hist_val_ad)
+            validation_history['discriminator_loss'].append(hist_val_disc)
 
-                ############################################
-                ########### train generator ################
+            discriminator_train_loss = np.mean(np.array(epoch_disc_loss), axis=0).item()
+            generator_train_loss = np.mean(np.array(epoch_gen_loss), axis=0).tolist()
 
-                self.set_trainable(False)
+            loss_history['discriminator_loss'].append(discriminator_train_loss)
+            loss_history['generator_loss'].append(generator_train_loss)
 
-                y_gan = [1] * self.batch_size
-                y_gan = np.asarray(y_gan, dtype=np.int).reshape(-1, 1)
-                y_gan = to_categorical(y_gan, num_classes=2)
+            logs['Gen_loss_train'] = generator_train_loss
+            logs['Disc_loss_train'] = discriminator_train_loss
+            logs['Gen_loss_val'] = hist_val_ad
+            logs['Disc_loss_val'] = hist_val_disc
 
-                hist_loss = self.ad_model.train_on_batch(inputs, [input_orig, y_gan])
-                # hist_loss = hist_loss.tolist()
-                # loss_history['discriminator_loss'].append(hist_loss)
+            l = {'Discriminator_Loss': np.mean(np.array(epoch_disc_loss), axis=0),
+                 'Generator_Loss': np.mean(np.array(epoch_gen_loss), axis=0)[0]}
 
-                self.set_trainable(True)
+            # Write Epoch Results ##############
 
-                if i % 100 == 0:
-                    print('Batch: ', i)
+            tbCallBack.on_epoch_end(epoch=ep, logs=l)
+            csv_logger.on_epoch_end(epoch=ep, logs=logs)
 
-            self.ad_model.save(os.path.join(self.save_epoch_models, 'Epoch.' + str(ep) + '.h5'))
+            # Write Epoch Models
+            self.ad_model.save(os.path.join(self.save_epoch_models, 'Adversarial_3.Epoch.' + str(ep) + '.h5'))
+            self.disc_model.save(os.path.join(self.save_epoch_models, 'Discriminator_3.Epoch.' + str(ep) + '.h5'))
+            self.un_def_gen_model.save(os.path.join(self.save_epoch_models, 'Generator_undefined_3.Epoch.' + str(ep) + '.h5'))
+
+            # Write Epoch Predictions
             self.predict_callback(epoch=ep)
-            # with open(os.path.join(self.save_file, 'Model_Summary.txt'), 'w') as fh:
-            #     json.dump(loss_history, fh)
+
+        # Write Epoch Histories
+        print('Writing Histories')
+
+        with open(os.path.join(self.save_file, 'Adversarial_History.txt'), 'w') as fh:
+            json.dump(loss_history, fh, indent=4)
+
+
 
         return self.ad_model
+
+    def model_test(self):
+        data = {}
+        print('Testing on Kodak')
+        kodak_dir = r'C:\Users\buggyr\Mosaic_Experiments\data\interim\Kodak'
+        ls = len(os.listdir(kodak_dir))
+        kodak_generator = predict_generator_rgb(kodak_dir)
+        res_Kodak = predict_generator(self.un_def_gen_model, kodak_generator, ls, data, 5, self.save_test)
+        data['Kodak_IMGS_PSNR'] = res_Kodak[0]
+        data['Kodak_IMGS_SSIM'] = res_Kodak[1]
+        data['Kodak_AVG_PSNR'] = res_Kodak[2]
+        data['Kodak_AVG_SSIM'] = res_Kodak[3]
+        print('Testing on McManus')
+        McM_dir = r'C:\Users\buggyr\Mosaic_Experiments\data\interim\McM'
+        ls = len(os.listdir(McM_dir))
+        McM_generator = predict_generator_rgb(McM_dir)
+        res_McM = predict_generator(self.un_def_gen_model, McM_generator, ls, data, 5, self.save_test)
+        data['McM_IMGS_PSNR'] = res_McM[0]
+        data['McM_IMGS_SSIM'] = res_McM[1]
+        data['McM_AVG_PSNR'] = res_McM[2]
+        data['McM_AVG_SSIM'] = res_McM[3]
+        # Write Results
+        data['Parameters'] = {
+            'Disc_Loss_Function': self.disc_loss_func,
+            'Gen_Loss_Function': self.gen_loss_func,
+            'Optimizer': str(type(self.disc_optimizer_func))
+        }
+        data['Training Set'] = {
+            'Training Path': load_training,
+        }
+        with open(os.path.join(self.save_file, 'results.txt'), 'w') as outfile:
+            json.dump(data, outfile, indent=4)
+
+        return
 
 
 class DiscModel:
@@ -1092,13 +1256,14 @@ class DiscModel:
         self.disc_model = None
         self.batch_size = None
         self.save_epoch_models = None
+        self.keyname = "_Descriminator_Model_3"
         return
 
     def mk_file(self):
         save_results = r'C:\Users\buggyr\Mosaic_Experiments\models'
-        keyname = "_descriminator1"
+
         now = datetime.datetime.now()
-        self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + keyname)
+        self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + self.keyname)
         os.mkdir(self.save_file)
         save_pred = os.path.join(self.save_file, 'Epoch_Predictions')
         os.mkdir(save_pred)
@@ -1123,103 +1288,200 @@ class DiscModel:
 
         inputs = Input(shape=(128, 128, 3))
 
-        conv1 = Conv2D(16, (3, 3), activation='relu', padding='same')(inputs)
+        conv1 = Conv2D(16, (3, 3), activation='relu', strides=2, padding='same')(inputs)
+        conv1 = BatchNormalization()(conv1)
 
-        conv1 = AveragePooling2D(pool_size=(2, 2))(conv1)
+        conv2 = Conv2D(32, (3, 3), activation='relu', strides=2, padding='same')(conv1)
+        conv2 = BatchNormalization()(conv2)
 
-        conv2 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
+        conv3 = Conv2D(64, (3, 3), activation='relu', strides=2, padding='same')(conv2)
+        conv3 = BatchNormalization()(conv3)
 
-        conv2 = AveragePooling2D(pool_size=(2, 2))(conv2)
-
-        conv3 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
-
-        conv3 = AveragePooling2D(pool_size=(2, 2))(conv3)
-
-        conv4 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
+        conv4 = Conv2D(1, (3, 3), activation='relu', padding='same')(conv3)
 
         flatten = Flatten(name='flatten')(conv4)
 
-        dense1 = Dense(512, activation='relu')(flatten)
+        dense1 = Dense(1024, activation='relu')(flatten)
 
-        dense3 = Dense(2, activation='softmax')(dense1)
+        dense3 = Dense(1, activation='sigmoid')(dense1)
 
         self.disc_model = Model(inputs=[inputs], outputs=[dense3])
 
-        optimizer_func = Adam(lr=1e-4)
-        loss_func = 'categorical_crossentropy'
+        optimizer_func = Adam(lr=1E-4, beta_1=0.9, beta_2=0.999, epsilon=1e-08)
+        loss_func = 'binary_crossentropy'
         self.disc_model.compile(optimizer=optimizer_func, loss=loss_func)
 
         self.disc_model.summary()
 
         return self.disc_model
 
-    def pre_train(self, training_path, gen_model_path, batch_size=32, epochs=50):
+    def pre_train(self, training_path, gen_model_path,
+                  load_validation=r'C:\Users\buggyr\Mosaic_Experiments\data\interim\validation_tiled',
+                  batch_size=32, epochs=50):
         self.batch_size = batch_size
         self.load_training = training_path
+        self.disc_model.stop_training = False
+
+
+
         gen_model = keras.models.load_model(gen_model_path)
         print("Loaded Gen-Model")
         fls = len(os.listdir(self.load_training))
+        flv = len(os.listdir(load_validation))
 
-        loss_history = {'discriminator_loss': [],
-                        'discriminator_acc': [], }
+        train_generator = train_generator_rgb_tiled(self.load_training, 64, self.batch_size)
+        validation_generator = train_generator_rgb_tiled(load_validation, 64, self.batch_size)
 
-        print("Begin Disc_Model Pre-Train")
+        csv_logger = keras.callbacks.CSVLogger(os.path.join(self.save_file, 'Discriminator_pre_training.log'),
+                                               separator=',', append=False)
+        csv_logger.set_model(self.disc_model)
+        csv_logger.on_train_begin()
+        tbCallBack = keras.callbacks.TensorBoard(log_dir=os.path.join(self.save_file, 'TNSR_BRD'), histogram_freq=0,
+                                                 write_graph=True, write_images=True, write_grads=True)
+        tbCallBack.set_model(self.disc_model)
 
-        for ep in range(epochs):
+        loss_history = []
+        val_history = []
+        csv_logs = {'Disc_loss_train': [], 'Disc_loss_val': [], }
 
-            for i in range(fls):
-                train_generator = train_generator_rgb_tiled(self.load_training, 64, self.batch_size)
+        print("Begin ", self.keyname, " Pre-Train")
+        num_batches = int(2 * fls)
+        progress_bar = Progbar(target=num_batches)
 
-                inputs, input_orig = next(train_generator)
+        for ep in range(1, epochs + 1):
+            print('Epoch {}/{}'.format(ep, epochs))
+            try:
+                for i in range(2*fls):
+                    inputs, input_orig = next(train_generator)
 
-                # print("batched Size:", input_orig.shape)
+                    gen_batch = gen_model.predict_on_batch(inputs)
 
-                gen_batch = gen_model.predict_on_batch(inputs)
+                    target = np.array([0] * self.batch_size + [0.95] * self.batch_size)
 
-                target_label = [0] * self.batch_size + [1] * self.batch_size
+                    input_gen = np.concatenate((gen_batch, input_orig), axis=0)
 
-                y_gan = np.asarray(target_label, dtype=np.int).reshape(-1, 1)
-                y_gan = to_categorical(y_gan, num_classes=2)
+                    loss_history.append(self.disc_model.train_on_batch(input_gen, target))
 
-                input_gen = np.concatenate((gen_batch, input_orig), axis=0)
+                    progress_bar.update(i + 1)
 
-                hist_loss = self.disc_model.fit(input_gen, y_gan, batch_size=self.batch_size, verbose=1)
-                # hist_loss = getattr(hist_loss, "tolist", lambda x=hist_loss: x)()
+                self.disc_model.save(os.path.join(self.save_epoch_models, 'Discriminator_3.Epoch.' + str(ep) + '.h5'))
 
-                loss_history['discriminator_loss'].append(hist_loss)
+                # test model
+                for i in range(2 * flv):
+                    inputs, input_orig = next(validation_generator)
 
-                # if i % 10 == 0:
-                #    print('Loss: ', hist_loss)
-            print('Epoch: ', ep)
-            self.disc_model.save(os.path.join(self.save_epoch_models, 'Epoch.' + str(ep) + '.h5'))
+                    # test Disc_model
+                    gen_batch = gen_model.predict_on_batch(inputs)
 
-        with open(os.path.join(self.save_file, 'Model_Summary.txt'), 'w') as fh:
-            json.dump(loss_history, fh)
+                    target = np.array([0] * self.batch_size + [0.95] * self.batch_size)
 
-        return self.disc_model, loss_history
+                    input_gen = np.concatenate((gen_batch, input_orig), axis=0)
 
+                    val_history.append(self.disc_model.test_on_batch(input_gen, target))
+
+                csv_logs['Disc_loss_train'] = np.mean(np.array(loss_history), axis=0)
+                csv_logs['Disc_loss_val'] = np.mean(np.array(val_history), axis=0)
+
+                csv_logger.on_epoch_end(epoch=ep, logs=csv_logs)
+                tbCallBack.on_epoch_end(epoch=ep, logs=csv_logs)
+
+            except KeyboardInterrupt:
+                print("Keyboard interrupt detected. Stopping early and Saving Out.")
+                self.disc_model.save(
+                    os.path.join(self.save_epoch_models, 'Discriminator_3.Epoch.' + str(ep) + '.h5'))
+                break
+
+        print('Disc_Model Pre_Train Complete')
+
+        return self.disc_model
+
+    def test(self, load_training, batch_size=32):
+        self.batch_size = batch_size
+
+        train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+        fls = len(os.listdir(self.load_training))
+        hist_loss = []
+        predictions = []
+
+        ad_mod = AdModel()
+        gen_model = ad_mod.load_gen_model()
+
+        for i in range(2 * fls):
+            inputs, input_orig = next(train_generator)
+
+            gen_batch = gen_model.predict_on_batch(inputs)
+
+            target_label = np.array([0] * self.batch_size + [1] * self.batch_size)
+
+            input_gen = np.concatenate((gen_batch, input_orig), axis=0)
+
+            hist_loss.append(self.disc_model.test_on_batch(input_gen, target_label))
+
+            print(hist_loss)
+
+            preds = (self.disc_model.predict_on_batch(input_gen))
+
+            print(preds)
+
+            predictions.append(preds)
+
+    def test_pos(self, load_training, batch_size=32):
+        self.batch_size = batch_size
+
+        train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+        fls = len(os.listdir(self.load_training))
+        hist_loss = []
+
+        ad_mod = AdModel()
+        gen_model = ad_mod.load_gen_model()
+
+        for i in range(2 * fls):
+            inputs, input_orig = next(train_generator)
+
+
+
+            gen_batch = gen_model.predict_on_batch(inputs)
+
+            hist_loss.append(self.disc_model.predict_on_batch(input_orig))
+
+            print(hist_loss)
+
+
+        return
 
 if __name__ == "__main__":
     ########### Pre-Train Discriminator  #################
     load_training = r'C:\Users\buggyr\Mosaic_Experiments\data\external\Gharbi_tiled'
-    mod_gen_path = r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-01 18-56_UNET_2_layer_64x64_mse_normal1_Patterns+Gharbi_2_input\DeMos_mod.h5'
-    #
+    good_gen_path = r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-07 20-22_UNET_2_layer_64x64_logcosh_normal1_Patterns+Gharbi_2_input_strides+upsample\Epoch_Models\model.111-0.00.hdf5'
+    bad_gen_path = r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-05 20-17_UNET_2_layer_64x64_logcosh_normal1_Patterns_2_input_strides+upsample\Epoch_Models\model.07-0.00.hdf5'
+    load_test = r'C:\Users\buggyr\Mosaic_Experiments\data\external\G_tst'
+
     # disc_mod = DiscModel()
-    #
+    # disc_mod.keyname = "_Discriminator_Model_3_BadGeneratorStart_Sigmoid"
     # disc_mod.mk_file()
-    #
     # disc_mod.build_model()
-    #
-    # d_mod = disc_mod.pre_train(load_training, mod_gen_path, 50)
+    # d_mod = disc_mod.pre_train(load_training, good_gen_path, epochs=20)
     ######################################################
     ########### Train AD #################################
 
-    adm = AdModel()
-    adm.load_gen_model()
-
-    adm.load_disc_model()
-    adm.assm_ad_model()
-
+    adm = AdModel(disc_loss_weight=0.01)
+    adm.keyname = "_Adversarial_Model_3_BadGeneratorStart_mse_loss"
     adm.mk_file()
 
-    adm.train(load_training=load_training, batch_size=32)
+    adm.disc_model = DiscModel().load_model(path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-03-20 22-30_Discriminator_Model_3_BadGeneratorStart_Sigmoid\Epoch_Models\Discriminator_3.Epoch.20.h5')
+
+    adm.assm_ad_model(path=bad_gen_path)
+
+    adm.train(load_training=load_training, batch_size=32, epochs=20, initial_epoch=1)
+
+    adm.model_test()
+
+    print('Training_Complete')
+
+    # disc_mod = DiscModel()
+    #
+    # disc_mod.load_model(r'C:\Users\buggyr\Mosaic_Experiments\models\2018-03-20 22-30_Discriminator_Model_3_BadGeneratorStart_Sigmoid\Epoch_Models\Discriminator_3.Epoch.20.h5')
+    #
+    # disc_mod.test(load_test)
+    #
+    # disc_mod.test_pos(load_test)

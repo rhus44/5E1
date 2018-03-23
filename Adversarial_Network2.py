@@ -18,7 +18,7 @@ from keras import backend as k
 
 k.clear_session()
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 class Save_predictions(keras.callbacks.Callback):
@@ -698,7 +698,7 @@ def predict_generator(model, k_gen, steps, data, bp, save_file):
         # pred_img = denormalise1(pred_img)
         # print("Output max:", str(pred_img.min()))
         # print("Output min", str(pred_img.max()))
-        print("Predicted Model Shape: " + str(pred_img.shape))
+        #print("Predicted Model Shape: " + str(pred_img.shape))
         # cv2.imshow('image',pred_img)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
@@ -708,11 +708,11 @@ def predict_generator(model, k_gen, steps, data, bp, save_file):
         pred_psnr = skimage.measure.compare_psnr(pred_img[bp:-bp, bp:-bp, :], orig_gen[bp:-bp, bp:-bp, :], 1)
         print(img_name + " PSNR: " + str(pred_psnr))
 
-        cv2.imshow("Original " + img_name, orig_gen)
-        cv2.imshow("Difference " + img_name, (np.floor((abs(orig_gen - pred_img)) * 255)).astype(np.uint8) + 100)
-        cv2.imshow("Predicted " + img_name, pred_img)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # cv2.imshow("Original " + img_name, orig_gen)
+        # cv2.imshow("Difference " + img_name, (np.floor((abs(orig_gen - pred_img)) * 255)).astype(np.uint8) + 100)
+        # cv2.imshow("Predicted " + img_name, pred_img)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
 
         cv2.imwrite(os.path.join(save_file, ('predicted_' + img_name)), denormalise1(pred_img))
 
@@ -852,7 +852,7 @@ class AdModel:
 
     def mk_file(self):
         save_results = r'C:\Users\buggyr\Mosaic_Experiments\models'
-        keyname = "_Ad_Model"
+        keyname = "_Adversarial_Model_2"
         now = datetime.datetime.now()
         self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + keyname)
         os.mkdir(self.save_file)
@@ -995,7 +995,7 @@ class AdModel:
         print('Disc_Loaded')
         return self.disc_model
 
-    def build_disc_model(self):
+    def build_disc_model(self, pre_train=False):
 
         inputs = Input(shape=(128, 128, 3))
 
@@ -1006,7 +1006,6 @@ class AdModel:
         conv3 = Conv2D(64, (3, 3), strides=2, padding='same')(conv2)
 
         conv4 = Conv2D(128, (3, 3), padding='same')(conv3)
-
 
         flatten = Flatten(name='flatten')(conv4)
 
@@ -1044,9 +1043,9 @@ class AdModel:
         for layr in range(len(self.un_def_gen_model.layers)):
 
             self.un_def_gen_model.layers[layr].set_weights(self.ad_model.layers[layr].get_weights())
-            gen_weights = self.un_def_gen_model.get_weights()
+
         self.un_def_gen_model.compile(optimizer=self.disc_optimizer_func, loss=self.gen_loss_func)
-        gen_weights = self.un_def_gen_model.get_weights()
+
         predict_gen = predict_generator_rgb(self.pred_dir)
         psnr = {}
         for _ in (os.listdir(self.pred_dir)):
@@ -1117,8 +1116,10 @@ class AdModel:
 
             train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
             validation_generator = train_generator_rgb_tiled(load_validation, 64, self.batch_size)
-            for i in range(2 * fln_training):
-                try:
+
+            try:
+                for i in range(2 * fln_training):
+
                     ####### train discriminator ########
                     inputs, input_orig = next(train_generator)
 
@@ -1158,14 +1159,14 @@ class AdModel:
 
                     progress_bar.update(i + 1)
 
-                except KeyboardInterrupt:
-                    print("Keyboard interrupt detected. Stopping early and Saving Out.")
-                    self.ad_model.save(os.path.join(self.save_epoch_models, 'Adversarial_2.Epoch.' + str(ep) + '.h5'))
-                    self.disc_model.save(
-                        os.path.join(self.save_epoch_models, 'Discriminator_2.Epoch.' + str(ep) + '.h5'))
-                    self.un_def_gen_model.save(
-                        os.path.join(self.save_epoch_models, 'Generator_undefined_2.Epoch.' + str(ep) + '.h5'))
-                    break
+            except KeyboardInterrupt:
+                print("Keyboard interrupt detected. Stopping early and Saving Out.")
+                self.ad_model.save(os.path.join(self.save_epoch_models, 'Adversarial_2.Epoch.' + str(ep) + '.h5'))
+                self.disc_model.save(
+                    os.path.join(self.save_epoch_models, 'Discriminator_2.Epoch.' + str(ep) + '.h5'))
+                self.un_def_gen_model.save(
+                    os.path.join(self.save_epoch_models, 'Generator_undefined_2.Epoch.' + str(ep) + '.h5'))
+                break
 
             # Epoch Loss History #####################
             hist_val_ad = 0
@@ -1224,31 +1225,31 @@ class AdModel:
             self.predict_callback(epoch=ep)
 
         # Write Epoch Histories
+        print('Writing Histories')
 
-
-        with open(os.path.join(self.save_file, 'History.txt'), 'w') as fh:
+        with open(os.path.join(self.save_file, 'Adversarial_History.txt'), 'w') as fh:
             json.dump(loss_history, fh, indent=4)
 
-        # Write Final Model
+
 
         return self.ad_model
 
     def model_test(self):
         data = {}
-        # Test Kodak
+        print('Testing on Kodak')
         kodak_dir = r'C:\Users\buggyr\Mosaic_Experiments\data\interim\Kodak'
         ls = len(os.listdir(kodak_dir))
         kodak_generator = predict_generator_rgb(kodak_dir)
-        res_Kodak = predict_generator(self.ad_model, kodak_generator, ls, data, 5, self.save_test)
+        res_Kodak = predict_generator(self.un_def_gen_model, kodak_generator, ls, data, 5, self.save_test)
         data['Kodak_IMGS_PSNR'] = res_Kodak[0]
         data['Kodak_IMGS_SSIM'] = res_Kodak[1]
         data['Kodak_AVG_PSNR'] = res_Kodak[2]
         data['Kodak_AVG_SSIM'] = res_Kodak[3]
-        # Test McManus
+        print('Testing on McManus')
         McM_dir = r'C:\Users\buggyr\Mosaic_Experiments\data\interim\McM'
         ls = len(os.listdir(McM_dir))
         McM_generator = predict_generator_rgb(McM_dir)
-        res_McM = predict_generator(self.ad_model, McM_generator, ls, data, 5, self.save_test)
+        res_McM = predict_generator(self.un_def_gen_model, McM_generator, ls, data, 5, self.save_test)
         data['McM_IMGS_PSNR'] = res_McM[0]
         data['McM_IMGS_SSIM'] = res_McM[1]
         data['McM_AVG_PSNR'] = res_McM[2]
@@ -1279,7 +1280,7 @@ class DiscModel:
 
     def mk_file(self):
         save_results = r'C:\Users\buggyr\Mosaic_Experiments\models'
-        keyname = "_descriminator1"
+        keyname = "_Descriminator_Model_2"
         now = datetime.datetime.now()
         self.save_file = os.path.join(save_results, now.strftime("%Y-%m-%d %H-%M") + keyname)
         os.mkdir(self.save_file)
@@ -1343,13 +1344,12 @@ class DiscModel:
         train_generator = train_generator_rgb_tiled(self.load_training, 64, self.batch_size)
         validation_generator = train_generator_rgb_tiled(load_validation, 64, self.batch_size)
 
-        csv_logger = keras.callbacks.CSVLogger(os.path.join(self.save_file, 'training.log'), separator=',',
+        csv_logger = keras.callbacks.CSVLogger(os.path.join(self.save_file, 'pre_training.log'), separator=',',
                                                append=False)
         csv_logger.set_model(self.disc_model)
         csv_logger.on_train_begin()
 
-        loss_history = {'discriminator_loss': [],
-                        'discriminator_acc': [], }
+        loss_history = []
         csv_logs = {'Disc_loss_train': [], 'Disc_loss_val': [], }
 
         print("Begin Disc_Model Pre-Train")
@@ -1357,6 +1357,7 @@ class DiscModel:
         progress_bar = Progbar(target=num_batches)
 
         for ep in range(epochs):
+            print('Epoch {}/{}'.format(ep, epochs))
             try:
                 for i in range(2*fls):
                     inputs, input_orig = next(train_generator)
@@ -1373,11 +1374,11 @@ class DiscModel:
 
                     hist_loss = self.disc_model.fit(input_gen, y_gan, batch_size=self.batch_size, verbose=1)
 
-                    loss_history['discriminator_loss'].append(hist_loss)
+                    loss_history.append((hist_loss.history)['loss'])
 
                     progress_bar.update(i + 1)
 
-                self.disc_model.save(os.path.join(self.save_epoch_models, 'Epoch.' + str(ep) + '.h5'))
+                self.disc_model.save(os.path.join(self.save_epoch_models, 'Discriminator_2.Epoch.' + str(ep) + '.h5'))
 
                 # test model
                 for i in range(2 * flv):
@@ -1396,50 +1397,106 @@ class DiscModel:
 
                     hist_val_disc = self.disc_model.test_on_batch(input_gen, y_gan)
 
-                    csv_logs['Disc_loss_train'] = hist_loss
+                    csv_logs['Disc_loss_train'] = hist_loss.history['loss']
                     csv_logs['Disc_loss_val'] = hist_val_disc
 
                 csv_logger.on_epoch_end(epoch=ep, logs=csv_logs)
+
+
 
             except KeyboardInterrupt:
                 print("Keyboard interrupt detected. Stopping early and Saving Out.")
                 self.disc_model.save(
                     os.path.join(self.save_epoch_models, 'Discriminator_2.Epoch.' + str(ep) + '.h5'))
                 break
-        with open(os.path.join(self.save_file, 'Model_Summary.txt'), 'w') as fh:
-            json.dump(loss_history, fh)
 
-        return self.disc_model, loss_history
+        print('Disc_Model Pre_Train Complete')
 
+        return self.disc_model
+
+    def test(self, load_training, batch_size=32):
+        self.batch_size = batch_size
+
+        train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+        fls = len(os.listdir(self.load_training))
+        hist_loss = []
+
+        ad_mod = AdModel()
+        gen_model = ad_mod.load_gen_model()
+
+        for i in range(2 * fls):
+            inputs, input_orig = next(train_generator)
+
+            gen_batch = gen_model.predict_on_batch(inputs)
+
+            target_label = [0] * self.batch_size + [1] * self.batch_size
+
+            y_gan = np.asarray(target_label, dtype=np.int).reshape(-1, 1)
+            y_gan = to_categorical(y_gan, num_classes=2)
+            y_gan = smooth_gan_labels(y_gan)
+
+            input_gen = np.concatenate((gen_batch, input_orig), axis=0)
+
+            hist_loss.append(self.disc_model.test_on_batch(input_gen, y_gan))
+
+            print(hist_loss)
+
+    def test_pos(self, load_training, batch_size=32):
+        self.batch_size = batch_size
+
+        train_generator = train_generator_rgb_tiled(load_training, 64, self.batch_size)
+        fls = len(os.listdir(self.load_training))
+        hist_loss = []
+
+        ad_mod = AdModel()
+        gen_model = ad_mod.load_gen_model()
+
+        for i in range(2 * fls):
+            inputs, input_orig = next(train_generator)
+
+
+
+            gen_batch = gen_model.predict_on_batch(inputs)
+
+            hist_loss.append(self.disc_model.predict_on_batch(input_orig))
+
+            print(hist_loss)
+
+
+        return
 
 if __name__ == "__main__":
     ########### Pre-Train Discriminator  #################
-    load_training = r'C:\Users\buggyr\Mosaic_Experiments\data\external\Gharbi_tiled'
+    load_training = r'C:\Users\buggyr\Mosaic_Experiments\data\external\G_tst'
     mod_gen_path = r'C:\Users\buggyr\Mosaic_Experiments\models\2018-02-01 18-56_UNET_2_layer_64x64_mse_normal1_Patterns+Gharbi_2_input\DeMos_mod.h5'
-    # disc_mod = DiscModel()
-    #
-    # disc_mod.mk_file()
-    #
-    # disc_mod.build_model()
-    #
-    #d_mod = disc_mod.pre_train(load_training, mod_gen_path, 50)
+    load_test = r'C:\Users\buggyr\Mosaic_Experiments\data\external\G_tst'
+
+    disc_mod = DiscModel()
+    disc_mod.mk_file()
+    disc_mod.build_model()
+    d_mod = disc_mod.pre_train(load_training, mod_gen_path, epochs=5)
     ######################################################
     ########### Train AD #################################
 
     adm = AdModel()
-
+    adm.mk_file()
     # adm.build_disc_model()
     #
     # adm.load_undefined_gen_model()
-    #
-    # adm.load_model(path=r'C:\Users\buggyr\Mosaic_Experiments\models\2018-03-16 20-55_Ad_Model\Epoch_Models\Adversarial_1.Epoch.10.h5')
-
-    adm.load_disc_model()
+    adm.disc_model = d_mod
 
     adm.assm_ad_model()
 
-    adm.mk_file()
-
-    adm.ad_model = adm.train(load_training=load_training, batch_size=32, epochs=200, initial_epoch=11)
+    adm.ad_model = adm.train(load_training=load_training, batch_size=32, epochs=5, initial_epoch=1)
 
     adm.model_test()
+
+    print('Training_Complete')
+
+    # disc_mod = DiscModel()
+    #
+    # disc_mod.load_model(r'C:\Users\buggyr\Mosaic_Experiments\models\2018-03-19 03-47_Adversarial_Model_2\Epoch_Models\Discriminator_1.Epoch.5.h5')
+    #
+    # disc_mod.test(load_test)
+    #
+    # disc_mod.test_pos(load_test)
